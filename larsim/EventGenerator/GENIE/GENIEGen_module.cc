@@ -353,6 +353,47 @@ namespace evgen{
     return;
   }
 
+  void DeleteOnePhoton(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
+    TRandom3 randomGen; // Random number generator
+    std::vector<int> photon_indices;
+    for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
+        int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
+        if (pdgCode == 22) {
+            photon_indices.push_back(i);
+        }
+    }
+    int num_photons = photon_indices.size();
+    std::cout << "Number of photons: " << num_photons << std::endl;
+    if (num_photons > 0) {
+      int index_to_delete = photon_indices[randomGen.Integer(num_photons)];
+      std::cout << "Deleting photon at index: " << index_to_delete << "...";
+      for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
+        if (i == index_to_delete) {
+          std::cout << "done" << std::endl;
+          continue;
+        }
+        const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
+        simb::MCParticle non_const_particle = simb::MCParticle(particle);
+        newMCTruth.Add(non_const_particle);
+      }
+    }
+
+    simb::MCNeutrino neutrino = originalMCTruth.GetNeutrino();
+    int CCNC = neutrino.CCNC();
+    int mode = neutrino.Mode();
+    int interactionType = neutrino.InteractionType();
+    int target = neutrino.Target();
+    int nucleon = neutrino.HitNuc();
+    int quark = neutrino.HitQuark();
+    double w = neutrino.W();
+    double x = neutrino.X();
+    double y = neutrino.Y();
+    double qsqr = neutrino.QSqr();
+    newMCTruth.SetNeutrino(CCNC, mode, interactionType, target, nucleon, quark, w, x, y, qsqr);
+
+    newMCTruth.SetOrigin(originalMCTruth.Origin());
+  }
+
   //____________________________________________________________________________
   void GENIEGen::produce(art::Event& evt)
   {
@@ -376,6 +417,7 @@ namespace evgen{
       while(!fGENIEHelp->Stop()){
 	
 	simb::MCTruth truth;
+	simb::MCTruth new_truth;
 	simb::MCFlux  flux;
 	simb::GTruth  gTruth;
 
@@ -385,7 +427,9 @@ namespace evgen{
 	// would never see anyway.
 	if(fGENIEHelp->Sample(truth, flux, gTruth)){
 
-	  truthcol ->push_back(truth);  
+	  DeleteOnePhoton(truth, new_truth);
+
+	  truthcol ->push_back(new_truth);  
 	  fluxcol  ->push_back(flux);
 	  gtruthcol->push_back(gTruth);
 	  util::CreateAssn(*this, evt, *truthcol, *fluxcol, *tfassn, fluxcol->size()-1, fluxcol->size());
