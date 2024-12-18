@@ -353,31 +353,78 @@ namespace evgen{
     return;
   }
 
-  void DeleteOnePhoton(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
-    TRandom3 randomGen; // Random number generator
-    std::vector<int> photon_indices;
+  // note that this does not consider rarer decays of pi0s
+  void ManuallyDecayPi0sToTwoPhotons(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
     for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
+        TRandom3 randomGen;
+
         int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
-        if (pdgCode == 22) {
-            photon_indices.push_back(i);
+        if (pdgCode == 111) { // pi0
+            std::cout << "Decaying pi0 at index: " << i << "...";
+            const simb::MCParticle& pi0 = originalMCTruth.GetParticle(i);
+
+            // Create new gamma particles from scratch
+            simb::MCParticle gamma1(979797971, 22, "manual_pi0Decay", pi0.TrackId(), 0.0);
+            simb::MCParticle gamma2(979797972, 22, "manual_pi0Decay", pi0.TrackId(), 0.0);
+
+            // Create position and momentum 4-vectors
+            TLorentzVector position(pi0.Vx(), pi0.Vy(), pi0.Vz(), pi0.T());
+            TLorentzVector pi0_momentum = pi0.Momentum();
+            TVector3 pi0_boost_vector = pi0_momentum.BoostVector();
+
+            // Calculate decay momenta
+            double pi0_mass = pi0.Mass();
+            double theta = randomGen.Uniform(0, 2*M_PI);
+            double phi = acos(1 - 2 * randomGen.Uniform(0, 1));
+            double pE = pi0_mass / 2;
+            double px = pE * sin(phi) * cos(theta);
+            double py = pE * sin(phi) * sin(theta);
+            double pz = pE * cos(phi);
+            TLorentzVector rest_frame_momentum_1(px, py, pz, pE);
+            TLorentzVector rest_frame_momentum_2(-px, -py, -pz, pE);
+
+            // transform the momenta to the lab frame using a Lorentz boost
+            TLorentzVector lab_frame_momentum_1 = rest_frame_momentum_1;
+            TLorentzVector lab_frame_momentum_2 = rest_frame_momentum_2;
+            lab_frame_momentum_1.Boost(pi0_boost_vector);
+            lab_frame_momentum_2.Boost(pi0_boost_vector);
+
+            gamma1.AddTrajectoryPoint(position, lab_frame_momentum_1);
+            gamma2.AddTrajectoryPoint(position, lab_frame_momentum_2);
+
+            std::cout << "Conservation check:" << std::endl;
+            TLorentzVector sum = lab_frame_momentum_1 + lab_frame_momentum_2;
+            std::cout << "Pi0 4-momentum: " << pi0_momentum.Px() << ", " << pi0_momentum.Py() 
+                      << ", " << pi0_momentum.Pz() << ", " << pi0_momentum.E() << std::endl;
+            std::cout << "Sum of photon 4-momenta: " << sum.Px() << ", " << sum.Py() 
+                      << ", " << sum.Pz() << ", " << sum.E() << std::endl;
+            std::cout << "4-momentum difference (should be ~0): " 
+                      << (pi0_momentum - sum).Px() << ", "
+                      << (pi0_momentum - sum).Py() << ", "
+                      << (pi0_momentum - sum).Pz() << ", "
+                      << (pi0_momentum - sum).E() << std::endl;
+
+            std::cout << "Debug Info: pi0_mass = " << pi0_mass 
+                     << ", pi0_momentum = (" << pi0_momentum.Px() << ", " 
+                     << pi0_momentum.Py() << ", " << pi0_momentum.Pz() 
+                     << ", " << pi0_momentum.E() << ")" << std::endl;
+            std::cout << "Debug Info: theta = " << theta << ", phi = " << phi << std::endl;
+            std::cout << "Debug Info: gamma1_momentum = (" << gamma1.Momentum().Px() 
+                     << ", " << gamma1.Momentum().Py() << ", " << gamma1.Momentum().Pz() 
+                     << ", " << gamma1.Momentum().E() << ")" << std::endl;
+            std::cout << "Debug Info: gamma2_momentum = (" << gamma2.Momentum().Px() 
+                     << ", " << gamma2.Momentum().Py() << ", " << gamma2.Momentum().Pz() 
+                     << ", " << gamma2.Momentum().E() << ")" << std::endl;
+
+        } else {
+            // Copy over non-pi0 particles
+            const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
+            simb::MCParticle non_const_particle = simb::MCParticle(particle);
+            newMCTruth.Add(non_const_particle);
         }
-    }
-    int num_photons = photon_indices.size();
-    std::cout << "Number of photons: " << num_photons << std::endl;
-    if (num_photons > 0) {
-      int index_to_delete = photon_indices[randomGen.Integer(num_photons)];
-      std::cout << "Deleting photon at index: " << index_to_delete << "...";
-      for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
-        if (i == index_to_delete) {
-          std::cout << "done" << std::endl;
-          continue;
-        }
-        const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
-        simb::MCParticle non_const_particle = simb::MCParticle(particle);
-        newMCTruth.Add(non_const_particle);
-      }
     }
 
+    // Copy over the neutrino information
     simb::MCNeutrino neutrino = originalMCTruth.GetNeutrino();
     int CCNC = neutrino.CCNC();
     int mode = neutrino.Mode();
@@ -390,7 +437,51 @@ namespace evgen{
     double y = neutrino.Y();
     double qsqr = neutrino.QSqr();
     newMCTruth.SetNeutrino(CCNC, mode, interactionType, target, nucleon, quark, w, x, y, qsqr);
+    newMCTruth.SetOrigin(originalMCTruth.Origin());
+  }
 
+  void DeleteOneRandomPhoton(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
+    TRandom3 randomGen;
+    std::vector<int> photon_indices;
+    for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
+        int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
+        if (pdgCode == 22) {
+            photon_indices.push_back(i);
+        }
+    }
+    int num_photons = photon_indices.size();
+    std::cout << "Number of primary photons: " << num_photons << std::endl;
+    if (num_photons == 0) {
+      std::cout << "No photons to delete" << std::endl;
+      for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
+        const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
+        simb::MCParticle non_const_particle = simb::MCParticle(particle);
+        newMCTruth.Add(non_const_particle);
+      }
+    } else {
+      int index_to_delete = photon_indices[randomGen.Integer(num_photons)];
+      for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
+        if (i == index_to_delete) {
+          std::cout << "Deleted photon at index: " << index_to_delete << std::endl;
+        } else { // copying over particles that aren't getting deleted
+          const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
+          simb::MCParticle non_const_particle = simb::MCParticle(particle);
+          newMCTruth.Add(non_const_particle);
+        }
+      }
+    }
+    simb::MCNeutrino neutrino = originalMCTruth.GetNeutrino();
+    int CCNC = neutrino.CCNC();
+    int mode = neutrino.Mode();
+    int interactionType = neutrino.InteractionType();
+    int target = neutrino.Target();
+    int nucleon = neutrino.HitNuc();
+    int quark = neutrino.HitQuark();
+    double w = neutrino.W();
+    double x = neutrino.X();
+    double y = neutrino.Y();
+    double qsqr = neutrino.QSqr();
+    newMCTruth.SetNeutrino(CCNC, mode, interactionType, target, nucleon, quark, w, x, y, qsqr);
     newMCTruth.SetOrigin(originalMCTruth.Origin());
   }
 
@@ -417,6 +508,7 @@ namespace evgen{
       while(!fGENIEHelp->Stop()){
 	
 	simb::MCTruth truth;
+	simb::MCTruth intermediate_truth;
 	simb::MCTruth new_truth;
 	simb::MCFlux  flux;
 	simb::GTruth  gTruth;
@@ -427,7 +519,8 @@ namespace evgen{
 	// would never see anyway.
 	if(fGENIEHelp->Sample(truth, flux, gTruth)){
 
-	  DeleteOnePhoton(truth, new_truth);
+	  ManuallyDecayPi0sToTwoPhotons(truth, intermediate_truth);
+    DeleteOneRandomPhoton(intermediate_truth, new_truth);
 
 	  truthcol ->push_back(new_truth);  
 	  fluxcol  ->push_back(flux);
