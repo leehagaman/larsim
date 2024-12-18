@@ -357,10 +357,11 @@ namespace evgen{
   void ManuallyDecayPi0sToTwoPhotons(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
     for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
         TRandom3 randomGen;
+        randomGen.SetSeed(0);
 
         int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
         if (pdgCode == 111) { // pi0
-            std::cout << "Decaying pi0 at index: " << i << "...";
+            std::cout << "Decaying pi0 at index " << i << std::endl;
             const simb::MCParticle& pi0 = originalMCTruth.GetParticle(i);
 
             // Create new gamma particles from scratch
@@ -415,6 +416,9 @@ namespace evgen{
             std::cout << "Debug Info: gamma2_momentum = (" << gamma2.Momentum().Px() 
                      << ", " << gamma2.Momentum().Py() << ", " << gamma2.Momentum().Pz() 
                      << ", " << gamma2.Momentum().E() << ")" << std::endl;
+
+            newMCTruth.Add(gamma1);
+            newMCTruth.Add(gamma2);
 
         } else {
             // Copy over non-pi0 particles
