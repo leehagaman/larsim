@@ -446,6 +446,7 @@ namespace evgen{
 
   void DeleteOneRandomPhoton(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
     TRandom3 randomGen;
+    randomGen.SetSeed(0);
     std::vector<int> photon_indices;
     for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
         int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
