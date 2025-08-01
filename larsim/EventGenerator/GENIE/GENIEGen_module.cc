@@ -158,6 +158,9 @@ namespace evgen {
     TH1F* fDeltaE;     ///< difference in neutrino energy from MCTruth::Enu() vs TParticle
     TH1F* fECons;      ///< histogram to determine if energy is conserved in the event
 
+    bool ManuallyDecayPi0s;  ///< whether to manually decay pi0s to photons
+    bool DeleteRandomGamma;   ///< whether to delete a random gamma
+
   };
 }
 
@@ -172,6 +175,8 @@ namespace evgen{
     , fGlobalTimeOffset(pset.get< double >("GlobalTimeOffset",0))
     , fRandomTimeOffset(pset.get< double >("RandomTimeOffset",1600.)) // BNB default value
     , fBeamType(::sim::kBNB)
+    , ManuallyDecayPi0s(pset.get<bool>("ManuallyDecayPi0s", false))
+    , DeleteRandomGamma(pset.get<bool>("DeleteRandomGamma", false))
   {  
     fStopwatch.Start();
 
@@ -360,17 +365,35 @@ namespace evgen{
         randomGen.SetSeed(0);
 
         int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
-        if (pdgCode == 111) { // pi0
+        int statusCode = originalMCTruth.GetParticle(i).StatusCode();
+        if (pdgCode == 111 && statusCode == 1) { // pi0, GENIE status code 1 = kIstStableFinalState
             std::cout << "Decaying pi0 at index " << i << std::endl;
             const simb::MCParticle& pi0 = originalMCTruth.GetParticle(i);
 
-            // Create new gamma particles from scratch
-            simb::MCParticle gamma1(979797971, 22, "manual_pi0Decay", pi0.TrackId(), 0.0);
-            simb::MCParticle gamma2(979797972, 22, "manual_pi0Decay", pi0.TrackId(), 0.0);
+            //std::cout << "original pi0 status code: " << pi0.StatusCode() << std::endl;
 
-            // Create position and momentum 4-vectors
-            TLorentzVector position(pi0.Vx(), pi0.Vy(), pi0.Vz(), pi0.T());
+            TLorentzVector pi0_position(pi0.Vx(), pi0.Vy(), pi0.Vz(), pi0.T());
             TLorentzVector pi0_momentum = pi0.Momentum();
+
+            //std::cout << "original pi0 position: " << pi0.Vx() << ", " << pi0.Vy() << ", " << pi0.Vz() << ", " << pi0.T() << std::endl;
+
+            //simb::MCParticle newPi0(pi0.TrackId(), pi0.PdgCode(), pi0.Process(), pi0.Mother(), pi0.Mass(), pi0.StatusCode()); // TEMPORARY re-creating the original pi0 exactly
+            simb::MCParticle newPi0(pi0.TrackId(), pi0.PdgCode(), pi0.Process(), pi0.Mother(), pi0.Mass(), 3); // 3 = kIStDecayedState from GENIE
+            newPi0.AddTrajectoryPoint(pi0_position, pi0_momentum);
+
+            //std::cout << "new pi0 position: " << newPi0.Vx() << ", " << newPi0.Vy() << ", " << newPi0.Vz() << ", " << newPi0.T() << std::endl;
+
+            // track_id, pdg, process, mother, mass, status_code
+            simb::MCParticle gamma1(979797971, 22, "primary", pi0.TrackId(), 0.0, 1);
+            simb::MCParticle gamma2(979797972, 22, "primary", pi0.TrackId(), 0.0, 1);
+
+            // segfaults here if we try to read gamma Vx values before adding a trajectory point
+
+            // I think this is GENIE vertices relative to nucleus, probably doesn't matter for the real trajectory
+            gamma1.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
+            gamma2.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
+
+
             TVector3 pi0_boost_vector = pi0_momentum.BoostVector();
 
             // Calculate decay momenta
@@ -390,21 +413,35 @@ namespace evgen{
             lab_frame_momentum_1.Boost(pi0_boost_vector);
             lab_frame_momentum_2.Boost(pi0_boost_vector);
 
-            gamma1.AddTrajectoryPoint(position, lab_frame_momentum_1);
-            gamma2.AddTrajectoryPoint(position, lab_frame_momentum_2);
+            //gamma1.AddTrajectoryPoint(pi0_position, lab_frame_momentum_1);
+            //gamma2.AddTrajectoryPoint(pi0_position, lab_frame_momentum_2);
+
+            //TLorentzVector zero_position(0, 0, 0, 0);
+            gamma1.AddTrajectoryPoint(pi0_position, lab_frame_momentum_1);
+            gamma2.AddTrajectoryPoint(pi0_position, lab_frame_momentum_2);
+
+            //std::cout << "pi0 Gvtx: " << pi0.Gvx() << ", " << pi0.Gvy() << ", " << pi0.Gvz() << ", " << pi0.Gvt() << std::endl;
+
+            // I think this is only for GENIE position in the nucleus, and shouldn't matter?
+            gamma1.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
+            gamma2.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
+
+            //std::cout << "gamma1 position after new trajectory point: " << gamma1.Vx() << ", " << gamma1.Vy() << ", " << gamma1.Vz() << ", " << gamma1.T() << std::endl;
+            //std::cout << "gamma2 position after new trajectory point: " << gamma2.Vx() << ", " << gamma2.Vy() << ", " << gamma2.Vz() << ", " << gamma2.T() << std::endl;
 
             std::cout << "Conservation check:" << std::endl;
             TLorentzVector sum = lab_frame_momentum_1 + lab_frame_momentum_2;
-            std::cout << "Pi0 4-momentum: " << pi0_momentum.Px() << ", " << pi0_momentum.Py() 
-                      << ", " << pi0_momentum.Pz() << ", " << pi0_momentum.E() << std::endl;
-            std::cout << "Sum of photon 4-momenta: " << sum.Px() << ", " << sum.Py() 
-                      << ", " << sum.Pz() << ", " << sum.E() << std::endl;
+            //std::cout << "Pi0 4-momentum: " << pi0_momentum.Px() << ", " << pi0_momentum.Py() 
+            //          << ", " << pi0_momentum.Pz() << ", " << pi0_momentum.E() << std::endl;
+            //std::cout << "Sum of photon 4-momenta: " << sum.Px() << ", " << sum.Py() 
+            //          << ", " << sum.Pz() << ", " << sum.E() << std::endl;
             std::cout << "4-momentum difference (should be ~0): " 
                       << (pi0_momentum - sum).Px() << ", "
                       << (pi0_momentum - sum).Py() << ", "
                       << (pi0_momentum - sum).Pz() << ", "
                       << (pi0_momentum - sum).E() << std::endl;
 
+            /*
             std::cout << "Debug Info: pi0_mass = " << pi0_mass 
                      << ", pi0_momentum = (" << pi0_momentum.Px() << ", " 
                      << pi0_momentum.Py() << ", " << pi0_momentum.Pz() 
@@ -416,7 +453,9 @@ namespace evgen{
             std::cout << "Debug Info: gamma2_momentum = (" << gamma2.Momentum().Px() 
                      << ", " << gamma2.Momentum().Py() << ", " << gamma2.Momentum().Pz() 
                      << ", " << gamma2.Momentum().E() << ")" << std::endl;
+            */
 
+            newMCTruth.Add(newPi0);
             newMCTruth.Add(gamma1);
             newMCTruth.Add(gamma2);
 
@@ -450,7 +489,8 @@ namespace evgen{
     std::vector<int> photon_indices;
     for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
         int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
-        if (pdgCode == 22) {
+        int statusCode = originalMCTruth.GetParticle(i).StatusCode();
+        if (pdgCode == 22 && statusCode == 1) {
             photon_indices.push_back(i);
         }
     }
@@ -512,69 +552,122 @@ namespace evgen{
     while(truthcol->size() < 1){
       while(!fGENIEHelp->Stop()){
 	
-	simb::MCTruth truth;
-	simb::MCTruth intermediate_truth;
-	simb::MCTruth new_truth;
-	simb::MCFlux  flux;
-	simb::GTruth  gTruth;
+        simb::MCTruth truth;
+        simb::MCTruth intermediate_truth;
+        simb::MCTruth new_truth;
+        simb::MCFlux  flux;
+        simb::GTruth  gTruth;
 
-	// GENIEHelper returns a false in the sample method if 
-	// either no neutrino was generated, or the interaction
-	// occurred beyond the detector's z extent - ie something we
-	// would never see anyway.
-	if(fGENIEHelp->Sample(truth, flux, gTruth)){
+        // GENIEHelper returns a false in the sample method if 
+        // either no neutrino was generated, or the interaction
+        // occurred beyond the detector's z extent - ie something we
+        // would never see anyway.
+        if(fGENIEHelp->Sample(truth, flux, gTruth)){
 
-	  ManuallyDecayPi0sToTwoPhotons(truth, intermediate_truth);
-    DeleteOneRandomPhoton(intermediate_truth, new_truth);
+          std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+          for (int i = 0; i < truth.NParticles(); ++i) {
+            std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+            std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+            std::cout << ", mother: " << truth.GetParticle(i).Mother();
+            std::cout << ", mass: " << truth.GetParticle(i).Mass();
+            std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+            std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+            std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+            std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+            std::cout << ", process: " << truth.GetParticle(i).Process();
+            std::cout << std::endl;
+          }
 
-	  truthcol ->push_back(new_truth);  
-	  fluxcol  ->push_back(flux);
-	  gtruthcol->push_back(gTruth);
-	  util::CreateAssn(*this, evt, *truthcol, *fluxcol, *tfassn, fluxcol->size()-1, fluxcol->size());
-	  util::CreateAssn(*this, evt, *truthcol, *gtruthcol, *tgtassn, gtruthcol->size()-1, gtruthcol->size());
-	  
-	  FillHistograms(truth);
-	  
-	  genie::GFluxI* fdriver = fGENIEHelp->GetFluxDriver(true);
-	  genie::flux::GDk2NuFlux* dk2nuDriver = 
-	    dynamic_cast<genie::flux::GDk2NuFlux*>(fdriver);
-	  if ( dk2nuDriver ) {
-	    const bsim::Dk2Nu& dk2nuObj = dk2nuDriver->GetDk2Nu();
-	    dk2nucol   ->push_back(dk2nuObj);
-	    const bsim::NuChoice& nuchoiceObj = dk2nuDriver->GetNuChoice();
-	    nuchoicecol->push_back(nuchoiceObj);
-	    util::CreateAssn(*this, evt, *truthcol, *dk2nucol, *dk2nuassn,
-			     dk2nucol->size()-1, dk2nucol->size());
-	    util::CreateAssn(*this, evt, *truthcol, *nuchoicecol, *nuchoiceassn,
-			     nuchoicecol->size()-1, nuchoicecol->size());
-	  }
+          if (ManuallyDecayPi0s) {
+            std::cout << "Manually decaying pi0s" << std::endl;
+            ManuallyDecayPi0sToTwoPhotons(truth, intermediate_truth);
+          } else {
+            intermediate_truth = truth;
+          }
 
-	  // check that the process code is not unsupported by GENIE
-	  // (see issue #18025 for reference);
-	  // if it is, print all the information we can about this truth record
-	  if (truth.NeutrinoSet() && (truth.GetNeutrino().InteractionType() == simb::kNuanceOffset)) {
-	    mf::LogWarning log("GENIEmissingProcessMapping");
-	    log << "Found an interaction that is not represented by the interaction type code in GENIE:"
-	      "\nMCTruth record:"
-	      "\n"
-	      ;
-	    sim::dump::DumpMCTruth(log, truth, 2U); // 2 trajectory points per line
-	    log <<
-	      "\nGENIE truth record:"
-	      "\n"
-	      ;
-	    sim::dump::DumpGTruth(log, gTruth);
-	  } // if 
-	  
-	}// end if genie was able to make an event
+          std::cout << "intermediate_truth.NParticles(): " << intermediate_truth.NParticles() << std::endl;
+          for (int i = 0; i < intermediate_truth.NParticles(); ++i) {
+            std::cout << "    pdg: " << intermediate_truth.GetParticle(i).PdgCode();
+            std::cout << ", track_id: " << intermediate_truth.GetParticle(i).TrackId();
+            std::cout << ", mother: " << intermediate_truth.GetParticle(i).Mother();
+            std::cout << ", mass: " << intermediate_truth.GetParticle(i).Mass();
+            std::cout << ", position: (" << intermediate_truth.GetParticle(i).Vx() << ", " << intermediate_truth.GetParticle(i).Vy() << ", " << intermediate_truth.GetParticle(i).Vz() << ")";
+            std::cout << ", momentum: (" << intermediate_truth.GetParticle(i).Px() << ", " << intermediate_truth.GetParticle(i).Py() << ", " << intermediate_truth.GetParticle(i).Pz() << ")";
+            std::cout << ", Gvtx: (" << intermediate_truth.GetParticle(i).Gvx() << ", " << intermediate_truth.GetParticle(i).Gvy() << ", " << intermediate_truth.GetParticle(i).Gvz() << ", " << intermediate_truth.GetParticle(i).Gvt() << ")";
+            std::cout << ", status code: " << intermediate_truth.GetParticle(i).StatusCode();
+            std::cout << ", process: " << intermediate_truth.GetParticle(i).Process();
+            std::cout << std::endl;
+          }
+
+          if (DeleteRandomGamma) {
+            std::cout << "Deleting random gamma" << std::endl;
+            DeleteOneRandomPhoton(intermediate_truth, new_truth);
+          } else {
+            new_truth = intermediate_truth;
+          }
+
+          std::cout << "new_truth.NParticles(): " << new_truth.NParticles() << std::endl;
+          for (int i = 0; i < new_truth.NParticles(); ++i) {
+            std::cout << "    pdg: " << new_truth.GetParticle(i).PdgCode();
+            std::cout << ", track_id: " << new_truth.GetParticle(i).TrackId();
+            std::cout << ", mother: " << new_truth.GetParticle(i).Mother();
+            std::cout << ", mass: " << new_truth.GetParticle(i).Mass();
+            std::cout << ", position: (" << new_truth.GetParticle(i).Vx() << ", " << new_truth.GetParticle(i).Vy() << ", " << new_truth.GetParticle(i).Vz() << ")";
+            std::cout << ", momentum: (" << new_truth.GetParticle(i).Px() << ", " << new_truth.GetParticle(i).Py() << ", " << new_truth.GetParticle(i).Pz() << ")";
+            std::cout << ", Gvtx: (" << new_truth.GetParticle(i).Gvx() << ", " << new_truth.GetParticle(i).Gvy() << ", " << new_truth.GetParticle(i).Gvz() << ", " << new_truth.GetParticle(i).Gvt() << ")";
+            std::cout << ", status code: " << new_truth.GetParticle(i).StatusCode();
+            std::cout << ", process: " << new_truth.GetParticle(i).Process();
+            std::cout << std::endl;
+          }
+
+          truthcol ->push_back(new_truth);  
+          fluxcol  ->push_back(flux);
+          gtruthcol->push_back(gTruth);
+          util::CreateAssn(*this, evt, *truthcol, *fluxcol, *tfassn, fluxcol->size()-1, fluxcol->size());
+          util::CreateAssn(*this, evt, *truthcol, *gtruthcol, *tgtassn, gtruthcol->size()-1, gtruthcol->size());
+          
+          FillHistograms(truth);
+          
+          genie::GFluxI* fdriver = fGENIEHelp->GetFluxDriver(true);
+          genie::flux::GDk2NuFlux* dk2nuDriver = 
+            dynamic_cast<genie::flux::GDk2NuFlux*>(fdriver);
+          if ( dk2nuDriver ) {
+            const bsim::Dk2Nu& dk2nuObj = dk2nuDriver->GetDk2Nu();
+            dk2nucol   ->push_back(dk2nuObj);
+            const bsim::NuChoice& nuchoiceObj = dk2nuDriver->GetNuChoice();
+            nuchoicecol->push_back(nuchoiceObj);
+            util::CreateAssn(*this, evt, *truthcol, *dk2nucol, *dk2nuassn,
+                dk2nucol->size()-1, dk2nucol->size());
+            util::CreateAssn(*this, evt, *truthcol, *nuchoicecol, *nuchoiceassn,
+                nuchoicecol->size()-1, nuchoicecol->size());
+          }
+
+          // check that the process code is not unsupported by GENIE
+          // (see issue #18025 for reference);
+          // if it is, print all the information we can about this truth record
+          if (truth.NeutrinoSet() && (truth.GetNeutrino().InteractionType() == simb::kNuanceOffset)) {
+            mf::LogWarning log("GENIEmissingProcessMapping");
+            log << "Found an interaction that is not represented by the interaction type code in GENIE:"
+              "\nMCTruth record:"
+              "\n"
+              ;
+            sim::dump::DumpMCTruth(log, truth, 2U); // 2 trajectory points per line
+            log <<
+              "\nGENIE truth record:"
+              "\n"
+              ;
+            sim::dump::DumpGTruth(log, gTruth);
+          } // if 
+          
+        }// end if genie was able to make an event
 
       }// end event generation loop
       
       // check to see if we are to pass empty spills
       if(truthcol->size() < 1 && fPassEmptySpills){
-	MF_LOG_DEBUG("GENIEGen") << "no events made for this spill but "
-			      << "passing it on and ending the event anyway";
-	break;
+        MF_LOG_DEBUG("GENIEGen") << "no events made for this spill but "
+                  << "passing it on and ending the event anyway";
+        break;
       }
 
     }// end loop while no interactions are made
