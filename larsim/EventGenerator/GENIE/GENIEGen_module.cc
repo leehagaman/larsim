@@ -63,6 +63,11 @@
 #include "nutools/EventGeneratorBase/GENIE/EVGBAssociationUtil.h"
 #include "nutools/EventGeneratorBase/evgenbase.h"
 
+// Optional Modifications, if you don't want normal GENIE neutrino events
+#include "ManuallyDecayPi0sToTwoPhotons.h"
+#include "DeleteOneRandomPhoton.h"
+#include "GenerateIsotropicSinglePhoton.h"
+
 ///Event Generation using GENIE, cosmics or single particles
 namespace evgen {
   /**
@@ -94,7 +99,7 @@ namespace evgen {
    * 
    * As custom, if the random seed is not provided by the configuration, one is
    * fetched from `NuRandomService` (if available), with the behaviour in
-	* lar::util::FetchRandomSeed().
+	 * lar::util::FetchRandomSeed().
    */
   class GENIEGen : public art::EDProducer {
   public:
@@ -160,6 +165,11 @@ namespace evgen {
 
     bool ManuallyDecayPi0s;  ///< whether to manually decay pi0s to photons
     bool DeleteRandomGamma;   ///< whether to delete a random gamma
+    bool GenerateIsotropicSinglePhoton; ///< replace all particles with single isotropic gamma
+    std::vector<double> SinglePhotonEnergyBinEdges;   ///< configurable via FHiCL
+    std::vector<double> SinglePhotonEnergyBinProbs; ///< configurable via FHiCL
+    std::vector<double> SinglePhotonCosThetaBinEdges; ///< configurable via FHiCL
+    std::vector<double> SinglePhotonCosThetaBinProbs; ///< configurable via FHiCL
 
   };
 }
@@ -177,6 +187,11 @@ namespace evgen{
     , fBeamType(::sim::kBNB)
     , ManuallyDecayPi0s(pset.get<bool>("ManuallyDecayPi0s", false))
     , DeleteRandomGamma(pset.get<bool>("DeleteRandomGamma", false))
+    , GenerateIsotropicSinglePhoton(pset.get<bool>("GenerateIsotropicSinglePhoton", false))
+    , SinglePhotonEnergyBinEdges(pset.get<std::vector<double>>("SinglePhotonEnergyBinEdges", std::vector<double>()))
+    , SinglePhotonEnergyBinProbs(pset.get<std::vector<double>>("SinglePhotonEnergyBinProbs", std::vector<double>()))
+    , SinglePhotonCosThetaBinEdges(pset.get<std::vector<double>>("SinglePhotonCosThetaBinEdges", std::vector<double>()))
+    , SinglePhotonCosThetaBinProbs(pset.get<std::vector<double>>("SinglePhotonCosThetaBinProbs", std::vector<double>()))
   {  
     fStopwatch.Start();
 
@@ -358,177 +373,7 @@ namespace evgen{
     return;
   }
 
-  // note that this does not consider rarer decays of pi0s
-  void ManuallyDecayPi0sToTwoPhotons(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
-    for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
-        TRandom3 randomGen;
-        randomGen.SetSeed(0);
-
-        int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
-        int statusCode = originalMCTruth.GetParticle(i).StatusCode();
-        if (pdgCode == 111 && statusCode == 1) { // pi0, GENIE status code 1 = kIstStableFinalState
-            std::cout << "Decaying pi0 at index " << i << std::endl;
-            const simb::MCParticle& pi0 = originalMCTruth.GetParticle(i);
-
-            //std::cout << "original pi0 status code: " << pi0.StatusCode() << std::endl;
-
-            TLorentzVector pi0_position(pi0.Vx(), pi0.Vy(), pi0.Vz(), pi0.T());
-            TLorentzVector pi0_momentum = pi0.Momentum();
-
-            //std::cout << "original pi0 position: " << pi0.Vx() << ", " << pi0.Vy() << ", " << pi0.Vz() << ", " << pi0.T() << std::endl;
-
-            //simb::MCParticle newPi0(pi0.TrackId(), pi0.PdgCode(), pi0.Process(), pi0.Mother(), pi0.Mass(), pi0.StatusCode()); // TEMPORARY re-creating the original pi0 exactly
-            simb::MCParticle newPi0(pi0.TrackId(), pi0.PdgCode(), pi0.Process(), pi0.Mother(), pi0.Mass(), 3); // 3 = kIStDecayedState from GENIE
-            newPi0.AddTrajectoryPoint(pi0_position, pi0_momentum);
-
-            //std::cout << "new pi0 position: " << newPi0.Vx() << ", " << newPi0.Vy() << ", " << newPi0.Vz() << ", " << newPi0.T() << std::endl;
-
-            // track_id, pdg, process, mother, mass, status_code
-            simb::MCParticle gamma1(979797971, 22, "primary", pi0.TrackId(), 0.0, 1);
-            simb::MCParticle gamma2(979797972, 22, "primary", pi0.TrackId(), 0.0, 1);
-
-            // segfaults here if we try to read gamma Vx values before adding a trajectory point
-
-            // I think this is GENIE vertices relative to nucleus, probably doesn't matter for the real trajectory
-            gamma1.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
-            gamma2.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
-
-
-            TVector3 pi0_boost_vector = pi0_momentum.BoostVector();
-
-            // Calculate decay momenta
-            double pi0_mass = pi0.Mass();
-            double theta = randomGen.Uniform(0, 2*M_PI);
-            double phi = acos(1 - 2 * randomGen.Uniform(0, 1));
-            double pE = pi0_mass / 2;
-            double px = pE * sin(phi) * cos(theta);
-            double py = pE * sin(phi) * sin(theta);
-            double pz = pE * cos(phi);
-            TLorentzVector rest_frame_momentum_1(px, py, pz, pE);
-            TLorentzVector rest_frame_momentum_2(-px, -py, -pz, pE);
-
-            // transform the momenta to the lab frame using a Lorentz boost
-            TLorentzVector lab_frame_momentum_1 = rest_frame_momentum_1;
-            TLorentzVector lab_frame_momentum_2 = rest_frame_momentum_2;
-            lab_frame_momentum_1.Boost(pi0_boost_vector);
-            lab_frame_momentum_2.Boost(pi0_boost_vector);
-
-            //gamma1.AddTrajectoryPoint(pi0_position, lab_frame_momentum_1);
-            //gamma2.AddTrajectoryPoint(pi0_position, lab_frame_momentum_2);
-
-            //TLorentzVector zero_position(0, 0, 0, 0);
-            gamma1.AddTrajectoryPoint(pi0_position, lab_frame_momentum_1);
-            gamma2.AddTrajectoryPoint(pi0_position, lab_frame_momentum_2);
-
-            //std::cout << "pi0 Gvtx: " << pi0.Gvx() << ", " << pi0.Gvy() << ", " << pi0.Gvz() << ", " << pi0.Gvt() << std::endl;
-
-            // I think this is only for GENIE position in the nucleus, and shouldn't matter?
-            gamma1.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
-            gamma2.SetGvtx(pi0.Gvx(), pi0.Gvy(), pi0.Gvz(), pi0.Gvt());
-
-            //std::cout << "gamma1 position after new trajectory point: " << gamma1.Vx() << ", " << gamma1.Vy() << ", " << gamma1.Vz() << ", " << gamma1.T() << std::endl;
-            //std::cout << "gamma2 position after new trajectory point: " << gamma2.Vx() << ", " << gamma2.Vy() << ", " << gamma2.Vz() << ", " << gamma2.T() << std::endl;
-
-            std::cout << "Conservation check:" << std::endl;
-            TLorentzVector sum = lab_frame_momentum_1 + lab_frame_momentum_2;
-            //std::cout << "Pi0 4-momentum: " << pi0_momentum.Px() << ", " << pi0_momentum.Py() 
-            //          << ", " << pi0_momentum.Pz() << ", " << pi0_momentum.E() << std::endl;
-            //std::cout << "Sum of photon 4-momenta: " << sum.Px() << ", " << sum.Py() 
-            //          << ", " << sum.Pz() << ", " << sum.E() << std::endl;
-            std::cout << "4-momentum difference (should be ~0): " 
-                      << (pi0_momentum - sum).Px() << ", "
-                      << (pi0_momentum - sum).Py() << ", "
-                      << (pi0_momentum - sum).Pz() << ", "
-                      << (pi0_momentum - sum).E() << std::endl;
-
-            /*
-            std::cout << "Debug Info: pi0_mass = " << pi0_mass 
-                     << ", pi0_momentum = (" << pi0_momentum.Px() << ", " 
-                     << pi0_momentum.Py() << ", " << pi0_momentum.Pz() 
-                     << ", " << pi0_momentum.E() << ")" << std::endl;
-            std::cout << "Debug Info: theta = " << theta << ", phi = " << phi << std::endl;
-            std::cout << "Debug Info: gamma1_momentum = (" << gamma1.Momentum().Px() 
-                     << ", " << gamma1.Momentum().Py() << ", " << gamma1.Momentum().Pz() 
-                     << ", " << gamma1.Momentum().E() << ")" << std::endl;
-            std::cout << "Debug Info: gamma2_momentum = (" << gamma2.Momentum().Px() 
-                     << ", " << gamma2.Momentum().Py() << ", " << gamma2.Momentum().Pz() 
-                     << ", " << gamma2.Momentum().E() << ")" << std::endl;
-            */
-
-            newMCTruth.Add(newPi0);
-            newMCTruth.Add(gamma1);
-            newMCTruth.Add(gamma2);
-
-        } else {
-            // Copy over non-pi0 particles
-            const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
-            simb::MCParticle non_const_particle = simb::MCParticle(particle);
-            newMCTruth.Add(non_const_particle);
-        }
-    }
-
-    // Copy over the neutrino information
-    simb::MCNeutrino neutrino = originalMCTruth.GetNeutrino();
-    int CCNC = neutrino.CCNC();
-    int mode = neutrino.Mode();
-    int interactionType = neutrino.InteractionType();
-    int target = neutrino.Target();
-    int nucleon = neutrino.HitNuc();
-    int quark = neutrino.HitQuark();
-    double w = neutrino.W();
-    double x = neutrino.X();
-    double y = neutrino.Y();
-    double qsqr = neutrino.QSqr();
-    newMCTruth.SetNeutrino(CCNC, mode, interactionType, target, nucleon, quark, w, x, y, qsqr);
-    newMCTruth.SetOrigin(originalMCTruth.Origin());
-  }
-
-  void DeleteOneRandomPhoton(simb::MCTruth& originalMCTruth, simb::MCTruth& newMCTruth) {
-    TRandom3 randomGen;
-    randomGen.SetSeed(0);
-    std::vector<int> photon_indices;
-    for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
-        int pdgCode = originalMCTruth.GetParticle(i).PdgCode();
-        int statusCode = originalMCTruth.GetParticle(i).StatusCode();
-        if (pdgCode == 22 && statusCode == 1) {
-            photon_indices.push_back(i);
-        }
-    }
-    int num_photons = photon_indices.size();
-    std::cout << "Number of primary photons: " << num_photons << std::endl;
-    if (num_photons == 0) {
-      std::cout << "No photons to delete" << std::endl;
-      for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
-        const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
-        simb::MCParticle non_const_particle = simb::MCParticle(particle);
-        newMCTruth.Add(non_const_particle);
-      }
-    } else {
-      int index_to_delete = photon_indices[randomGen.Integer(num_photons)];
-      for (int i = 0; i < originalMCTruth.NParticles(); ++i) {
-        if (i == index_to_delete) {
-          std::cout << "Deleted photon at index: " << index_to_delete << std::endl;
-        } else { // copying over particles that aren't getting deleted
-          const simb::MCParticle& particle = originalMCTruth.GetParticle(i);
-          simb::MCParticle non_const_particle = simb::MCParticle(particle);
-          newMCTruth.Add(non_const_particle);
-        }
-      }
-    }
-    simb::MCNeutrino neutrino = originalMCTruth.GetNeutrino();
-    int CCNC = neutrino.CCNC();
-    int mode = neutrino.Mode();
-    int interactionType = neutrino.InteractionType();
-    int target = neutrino.Target();
-    int nucleon = neutrino.HitNuc();
-    int quark = neutrino.HitQuark();
-    double w = neutrino.W();
-    double x = neutrino.X();
-    double y = neutrino.Y();
-    double qsqr = neutrino.QSqr();
-    newMCTruth.SetNeutrino(CCNC, mode, interactionType, target, nucleon, quark, w, x, y, qsqr);
-    newMCTruth.SetOrigin(originalMCTruth.Origin());
-  }
+  
 
   //____________________________________________________________________________
   void GENIEGen::produce(art::Event& evt)
@@ -553,8 +398,6 @@ namespace evgen{
       while(!fGENIEHelp->Stop()){
 	
         simb::MCTruth truth;
-        simb::MCTruth intermediate_truth;
-        simb::MCTruth new_truth;
         simb::MCFlux  flux;
         simb::GTruth  gTruth;
 
@@ -578,49 +421,65 @@ namespace evgen{
             std::cout << std::endl;
           }
 
-          if (ManuallyDecayPi0s) {
-            std::cout << "Manually decaying pi0s" << std::endl;
-            ManuallyDecayPi0sToTwoPhotons(truth, intermediate_truth);
-          } else {
-            intermediate_truth = truth;
+          if (GenerateIsotropicSinglePhoton) {
+            std::cout << "Generating isotropic single photon" << std::endl;
+            GenerateIsotropicSinglePhotonWithBins(
+              SinglePhotonEnergyBinEdges, SinglePhotonEnergyBinProbs,
+              SinglePhotonCosThetaBinEdges, SinglePhotonCosThetaBinProbs,
+              truth
+            );
+            std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+            for (int i = 0; i < truth.NParticles(); ++i) {
+              std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+              std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+              std::cout << ", mother: " << truth.GetParticle(i).Mother();
+              std::cout << ", mass: " << truth.GetParticle(i).Mass();
+              std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+              std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+              std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+              std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+              std::cout << ", process: " << truth.GetParticle(i).Process();
+              std::cout << std::endl;
+            }
           }
 
-          std::cout << "intermediate_truth.NParticles(): " << intermediate_truth.NParticles() << std::endl;
-          for (int i = 0; i < intermediate_truth.NParticles(); ++i) {
-            std::cout << "    pdg: " << intermediate_truth.GetParticle(i).PdgCode();
-            std::cout << ", track_id: " << intermediate_truth.GetParticle(i).TrackId();
-            std::cout << ", mother: " << intermediate_truth.GetParticle(i).Mother();
-            std::cout << ", mass: " << intermediate_truth.GetParticle(i).Mass();
-            std::cout << ", position: (" << intermediate_truth.GetParticle(i).Vx() << ", " << intermediate_truth.GetParticle(i).Vy() << ", " << intermediate_truth.GetParticle(i).Vz() << ")";
-            std::cout << ", momentum: (" << intermediate_truth.GetParticle(i).Px() << ", " << intermediate_truth.GetParticle(i).Py() << ", " << intermediate_truth.GetParticle(i).Pz() << ")";
-            std::cout << ", Gvtx: (" << intermediate_truth.GetParticle(i).Gvx() << ", " << intermediate_truth.GetParticle(i).Gvy() << ", " << intermediate_truth.GetParticle(i).Gvz() << ", " << intermediate_truth.GetParticle(i).Gvt() << ")";
-            std::cout << ", status code: " << intermediate_truth.GetParticle(i).StatusCode();
-            std::cout << ", process: " << intermediate_truth.GetParticle(i).Process();
-            std::cout << std::endl;
+          if (ManuallyDecayPi0s) {
+            std::cout << "Manually decaying pi0s" << std::endl;
+            ManuallyDecayPi0sToTwoPhotons(truth);
+            std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+            for (int i = 0; i < truth.NParticles(); ++i) {
+              std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+              std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+              std::cout << ", mother: " << truth.GetParticle(i).Mother();
+              std::cout << ", mass: " << truth.GetParticle(i).Mass();
+              std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+              std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+              std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+              std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+              std::cout << ", process: " << truth.GetParticle(i).Process();
+              std::cout << std::endl;
+            }
           }
 
           if (DeleteRandomGamma) {
             std::cout << "Deleting random gamma" << std::endl;
-            DeleteOneRandomPhoton(intermediate_truth, new_truth);
-          } else {
-            new_truth = intermediate_truth;
+            DeleteOneRandomPhoton(truth);
+            std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+            for (int i = 0; i < truth.NParticles(); ++i) {
+              std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+              std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+              std::cout << ", mother: " << truth.GetParticle(i).Mother();
+              std::cout << ", mass: " << truth.GetParticle(i).Mass();
+              std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+              std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+              std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+              std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+              std::cout << ", process: " << truth.GetParticle(i).Process();
+              std::cout << std::endl;
+            }
           }
 
-          std::cout << "new_truth.NParticles(): " << new_truth.NParticles() << std::endl;
-          for (int i = 0; i < new_truth.NParticles(); ++i) {
-            std::cout << "    pdg: " << new_truth.GetParticle(i).PdgCode();
-            std::cout << ", track_id: " << new_truth.GetParticle(i).TrackId();
-            std::cout << ", mother: " << new_truth.GetParticle(i).Mother();
-            std::cout << ", mass: " << new_truth.GetParticle(i).Mass();
-            std::cout << ", position: (" << new_truth.GetParticle(i).Vx() << ", " << new_truth.GetParticle(i).Vy() << ", " << new_truth.GetParticle(i).Vz() << ")";
-            std::cout << ", momentum: (" << new_truth.GetParticle(i).Px() << ", " << new_truth.GetParticle(i).Py() << ", " << new_truth.GetParticle(i).Pz() << ")";
-            std::cout << ", Gvtx: (" << new_truth.GetParticle(i).Gvx() << ", " << new_truth.GetParticle(i).Gvy() << ", " << new_truth.GetParticle(i).Gvz() << ", " << new_truth.GetParticle(i).Gvt() << ")";
-            std::cout << ", status code: " << new_truth.GetParticle(i).StatusCode();
-            std::cout << ", process: " << new_truth.GetParticle(i).Process();
-            std::cout << std::endl;
-          }
-
-          truthcol ->push_back(new_truth);  
+          truthcol ->push_back(truth);  
           fluxcol  ->push_back(flux);
           gtruthcol->push_back(gTruth);
           util::CreateAssn(*this, evt, *truthcol, *fluxcol, *tfassn, fluxcol->size()-1, fluxcol->size());
