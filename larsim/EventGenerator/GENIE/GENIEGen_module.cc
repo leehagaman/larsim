@@ -63,6 +63,11 @@
 #include "nutools/EventGeneratorBase/GENIE/EVGBAssociationUtil.h"
 #include "nutools/EventGeneratorBase/evgenbase.h"
 
+// Optional Modifications, if you don't want to modify normal GENIE neutrino generation events
+#include "ManuallyDecayPi0sToTwoPhotons.h"
+#include "DeleteOneRandomPhoton.h"
+#include "GenerateIsotropicSinglePhoton.h"
+
 ///Event Generation using GENIE, cosmics or single particles
 namespace evgen {
   /**
@@ -158,6 +163,14 @@ namespace evgen {
     TH1F* fDeltaE;     ///< difference in neutrino energy from MCTruth::Enu() vs TParticle
     TH1F* fECons;      ///< histogram to determine if energy is conserved in the event
 
+    bool ManuallyDecayPi0s;  ///< whether to manually decay pi0s to photons
+    bool DeleteRandomGamma;   ///< whether to delete a random gamma
+    bool GenerateIsotropicSinglePhoton; ///< replace all particles with single isotropic gamma
+    std::vector<double> SinglePhotonEnergyBinEdges;   ///< configurable via FHiCL
+    std::vector<double> SinglePhotonEnergyBinProbs; ///< configurable via FHiCL
+    std::vector<double> SinglePhotonCosThetaBinEdges; ///< configurable via FHiCL
+    std::vector<double> SinglePhotonCosThetaBinProbs; ///< configurable via FHiCL
+
   };
 }
 
@@ -172,7 +185,14 @@ namespace evgen{
     , fGlobalTimeOffset(pset.get< double >("GlobalTimeOffset",0))
     , fRandomTimeOffset(pset.get< double >("RandomTimeOffset",1600.)) // BNB default value
     , fBeamType(::sim::kBNB)
-  {  
+    , ManuallyDecayPi0s(pset.get<bool>("ManuallyDecayPi0s", false))
+    , DeleteRandomGamma(pset.get<bool>("DeleteRandomGamma", false))
+    , GenerateIsotropicSinglePhoton(pset.get<bool>("GenerateIsotropicSinglePhoton", false))
+    , SinglePhotonEnergyBinEdges(pset.get<std::vector<double>>("SinglePhotonEnergyBinEdges", std::vector<double>()))
+    , SinglePhotonEnergyBinProbs(pset.get<std::vector<double>>("SinglePhotonEnergyBinProbs", std::vector<double>()))
+    , SinglePhotonCosThetaBinEdges(pset.get<std::vector<double>>("SinglePhotonCosThetaBinEdges", std::vector<double>()))
+    , SinglePhotonCosThetaBinProbs(pset.get<std::vector<double>>("SinglePhotonCosThetaBinProbs", std::vector<double>()))
+  {
     fStopwatch.Start();
 
     produces< std::vector<simb::MCTruth> >();
@@ -385,7 +405,79 @@ namespace evgen{
 	// would never see anyway.
 	if(fGENIEHelp->Sample(truth, flux, gTruth)){
 
-	  truthcol ->push_back(truth);  
+    std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+    for (int i = 0; i < truth.NParticles(); ++i) {
+      std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+      std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+      std::cout << ", mother: " << truth.GetParticle(i).Mother();
+      std::cout << ", mass: " << truth.GetParticle(i).Mass();
+      std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+      std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+      std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+      std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+      std::cout << ", process: " << truth.GetParticle(i).Process();
+      std::cout << std::endl;
+    }
+
+    if (GenerateIsotropicSinglePhoton) {
+      std::cout << "Generating isotropic single photon" << std::endl;
+      GenerateIsotropicSinglePhotonWithBins(
+        SinglePhotonEnergyBinEdges, SinglePhotonEnergyBinProbs,
+        SinglePhotonCosThetaBinEdges, SinglePhotonCosThetaBinProbs,
+        truth
+      );
+      std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+      for (int i = 0; i < truth.NParticles(); ++i) {
+        std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+        std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+        std::cout << ", mother: " << truth.GetParticle(i).Mother();
+        std::cout << ", mass: " << truth.GetParticle(i).Mass();
+        std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+        std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+        std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+        std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+        std::cout << ", process: " << truth.GetParticle(i).Process();
+        std::cout << std::endl;
+      }
+    }
+
+    if (ManuallyDecayPi0s) {
+      std::cout << "Manually decaying pi0s" << std::endl;
+      ManuallyDecayPi0sToTwoPhotons(truth);
+      std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+      for (int i = 0; i < truth.NParticles(); ++i) {
+        std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+        std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+        std::cout << ", mother: " << truth.GetParticle(i).Mother();
+        std::cout << ", mass: " << truth.GetParticle(i).Mass();
+        std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+        std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+        std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+        std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+        std::cout << ", process: " << truth.GetParticle(i).Process();
+        std::cout << std::endl;
+      }
+    }
+
+    if (DeleteRandomGamma) {
+      std::cout << "Deleting random gamma" << std::endl;
+      DeleteOneRandomPhoton(truth);
+      std::cout << "truth.NParticles(): " << truth.NParticles() << std::endl;
+      for (int i = 0; i < truth.NParticles(); ++i) {
+        std::cout << "    pdg: " << truth.GetParticle(i).PdgCode();
+        std::cout << ", track_id: " << truth.GetParticle(i).TrackId();
+        std::cout << ", mother: " << truth.GetParticle(i).Mother();
+        std::cout << ", mass: " << truth.GetParticle(i).Mass();
+        std::cout << ", position: (" << truth.GetParticle(i).Vx() << ", " << truth.GetParticle(i).Vy() << ", " << truth.GetParticle(i).Vz() << ")";
+        std::cout << ", momentum: (" << truth.GetParticle(i).Px() << ", " << truth.GetParticle(i).Py() << ", " << truth.GetParticle(i).Pz() << ")";
+        std::cout << ", Gvtx: (" << truth.GetParticle(i).Gvx() << ", " << truth.GetParticle(i).Gvy() << ", " << truth.GetParticle(i).Gvz() << ", " << truth.GetParticle(i).Gvt() << ")";
+        std::cout << ", status code: " << truth.GetParticle(i).StatusCode();
+        std::cout << ", process: " << truth.GetParticle(i).Process();
+        std::cout << std::endl;
+      }
+    }
+
+	  truthcol ->push_back(truth);
 	  fluxcol  ->push_back(flux);
 	  gtruthcol->push_back(gTruth);
 	  util::CreateAssn(*this, evt, *truthcol, *fluxcol, *tfassn, fluxcol->size()-1, fluxcol->size());
