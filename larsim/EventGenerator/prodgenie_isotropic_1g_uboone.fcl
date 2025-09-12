@@ -19,7 +19,7 @@ physics.producers.generator.GenerateIsotropicSinglePhoton: true
 // these bin edges and weights form the probability distributions for random sampling of the energy and angle
 // bin edges must be increasing, bin probabalities must sum to 1
 
-physics.producers.generator.SinglePhotonEnergyBinEdges: [0, 0.050, 0.100, 0.300, 0.800, 1.200, 2.000, 10.000]
+physics.producers.generator.SinglePhotonEnergyBinEdges: [0, 0.050, 0.100, 0.300, 0.800, 1.200, 2.000, 5.000]
 physics.producers.generator.SinglePhotonEnergyBinProbs:  [0.01, 0.02,  0.4,  0.3,   0.2,  0.06,   0.01] 
 
 physics.producers.generator.SinglePhotonCosThetaBinEdges: [-1.0, 0.0, 0.5, 0.75, 0.9, 1.0]
